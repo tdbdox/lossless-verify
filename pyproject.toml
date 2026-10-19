@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lossless-verify"
+version = "0.1.0"
+description = "Detect fake-lossless / lossy-sourced audio and sort files by spectral verification result."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Travis Patchett" }]
+keywords = ["audio", "flac", "lossless", "spectral-analysis", "audio-quality", "dj", "music-production"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+dependencies = [
+    "numpy>=1.24",
+    "mutagen>=1.45",
+]
+
+[project.scripts]
+lossless-verify = "lossless_verify:cli"
+
+[tool.setuptools]
+py-modules = ["lossless_verify"]
