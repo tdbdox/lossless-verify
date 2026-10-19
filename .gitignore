@@ -5,3 +5,4 @@ __pycache__/
 venv/
 .DS_Store
 flac-verify-output/
+lossless-verify-output/

@@ -106,6 +106,9 @@ def allowlisted(path, frags):
 
 def find_tool(name, explicit=None):
     if explicit:
+        if not (os.path.isfile(explicit) and os.access(explicit, os.X_OK)):
+            raise FileNotFoundError(
+                "%s not found: %s (not an executable file)" % (name, explicit))
         return explicit
     found = shutil.which(name)
     if not found:
@@ -131,6 +134,13 @@ def decode_mono(path, ffmpeg, ffprobe):
          "-f", "f32le", "-acodec", "pcm_f32le", "-"],
         capture_output=True)
     pcm = np.frombuffer(proc.stdout, dtype=np.float32)
+    if proc.returncode != 0 and len(pcm) == 0:
+        # Hard failure: no audio at all. Surface ffmpeg's message so the log
+        # says *why* (corrupt file, unsupported codec) instead of just UNKNOWN.
+        # (Partial decodes — nonzero exit but some PCM, e.g. truncated files —
+        # still fall through so analyze() can verdict the usable audio.)
+        err = proc.stderr.decode("utf-8", "replace").strip()[:500]
+        raise RuntimeError("ffmpeg failed for %s: %s" % (path, err))
     return pcm, sr
 
 
@@ -250,15 +260,36 @@ def tag_file(path, verdict, cutoff_hz):
         new = (cleaned + " | " + stamp) if cleaned.strip(" |") else stamp
         audio["\xa9cmt"] = [new]
         audio.save()
-    else:  # wav / aiff / ogg / opus: generic comment where supported
+    elif ext in (".wav", ".aiff", ".aif"):
+        # WAV/AIFF store comments as ID3 COMM frames (same as MP3).
+        from mutagen.id3 import ID3, COMM
+        if ext == ".wav":
+            from mutagen.wave import WAVE
+            audio = WAVE(path)
+        else:
+            from mutagen.aiff import AIFF
+            audio = AIFF(path)
+        if audio.tags is None:
+            audio.add_tags()
+        existing = " ".join(c.text[0] for c in audio.tags.getall("COMM") if c.text)
+        cleaned = STAMP_RE.sub("", existing)
+        new = (cleaned + " | " + stamp) if cleaned.strip(" |") else stamp
+        audio.tags.delall("COMM")
+        audio.tags.add(COMM(encoding=3, lang="eng", desc="", text=new))
+        audio.save()
+    elif ext in (".ogg", ".opus"):
+        # Vorbis comments.
         import mutagen
         audio = mutagen.File(path)
-        if audio is not None and hasattr(audio, "tags") and audio.tags is not None:
-            existing = " ".join(audio.get("comment", []))
-            cleaned = STAMP_RE.sub("", existing)
-            new = (cleaned + " | " + stamp) if cleaned.strip(" |") else stamp
-            audio["comment"] = new
-            audio.save()
+        if audio is None or not hasattr(audio, "tags") or audio.tags is None:
+            raise RuntimeError("cannot write comment to %s (no tag container)" % path)
+        existing = " ".join(audio.get("comment", []))
+        cleaned = STAMP_RE.sub("", existing)
+        new = (cleaned + " | " + stamp) if cleaned.strip(" |") else stamp
+        audio["comment"] = new
+        audio.save()
+    else:
+        raise RuntimeError("tagging not supported for %s files" % ext)
     return stamp
 
 
@@ -326,8 +357,15 @@ def handle_file(path, scan_root, args, ffmpeg, ffprobe, allow_frags, sink=None):
         v == "SUSPECT" and not args.sort_suspect)
     dest = None
     if should_sort:
-        dest = sort_file(path, rel, res, args.output_dir, args.move,
-                         args.log_file, args.quiet, sink=sink)
+        try:
+            dest = sort_file(path, rel, res, args.output_dir, args.move,
+                             args.log_file, args.quiet, sink=sink)
+        except Exception as e:
+            # One bad file (disk full, permissions, read-only output) must
+            # not abort the whole scan — log it and move on.
+            log("sort_error rel=%s err=%r" % (rel, e),
+                args.log_file, args.quiet, sink=sink)
+            return "ERROR"
     if args.tag and v in ("PASS", "SUSPECT", "FAIL"):
         # Tag the sorted copy in copy mode (source untouched); tag the
         # moved file after moving in --move mode; tag the source in place
@@ -360,6 +398,8 @@ def _process_one(task):
 
 def collect_files(input_path, exts, output_dir=None):
     if os.path.isfile(input_path):
+        if os.path.splitext(input_path)[1].lower() not in exts:
+            return [], os.path.dirname(os.path.abspath(input_path))
         return [input_path], os.path.dirname(os.path.abspath(input_path))
     scan_root = os.path.abspath(input_path)
     out_abs = os.path.abspath(output_dir) if output_dir else None
@@ -377,6 +417,10 @@ def collect_files(input_path, exts, output_dir=None):
             dirs[:] = [d for d in dirs
                        if os.path.abspath(os.path.join(root, d)) != out_abs]
         for fn in sorted(fns):
+            # Skip macOS AppleDouble files (._*.flac on FAT/exFAT/network
+            # volumes) — they match the extension but are not real audio.
+            if fn.startswith("._"):
+                continue
             if os.path.splitext(fn)[1].lower() in exts:
                 files.append(os.path.join(root, fn))
     return files, scan_root
@@ -423,26 +467,55 @@ def main(argv=None):
     if not os.path.exists(args.path):
         print("input not found: %s" % args.path, file=sys.stderr)
         return 2
-    ffmpeg = find_tool("ffmpeg", args.ffmpeg)
+    try:
+        ffmpeg = find_tool("ffmpeg", args.ffmpeg)
+    except FileNotFoundError as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 2
     if args.ffprobe:
-        ffprobe = find_tool("ffprobe", args.ffprobe)
+        try:
+            ffprobe = find_tool("ffprobe", args.ffprobe)
+        except FileNotFoundError as e:
+            print("error: %s" % e, file=sys.stderr)
+            return 2
     elif args.ffmpeg:
         # ffprobe next to --ffmpeg if it exists there, else ffprobe on PATH.
-        # (find_tool returns an explicit path unchecked, so check existence
-        # here — a bare "--ffmpeg ffmpeg" also needs abspath, since
-        # dirname("ffmpeg") is "" and would bypass shutil.which.)
         candidate = os.path.join(
             os.path.dirname(os.path.abspath(args.ffmpeg)), "ffprobe")
-        ffprobe = (candidate if os.path.exists(candidate)
-                   else find_tool("ffprobe", None))
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            ffprobe = candidate
+        else:
+            try:
+                ffprobe = find_tool("ffprobe", None)
+            except FileNotFoundError as e:
+                print("error: %s" % e, file=sys.stderr)
+                return 2
     else:
-        ffprobe = find_tool("ffprobe", None)
+        try:
+            ffprobe = find_tool("ffprobe", None)
+        except FileNotFoundError as e:
+            print("error: %s" % e, file=sys.stderr)
+            return 2
+    if args.log_file:
+        # Create the log's parent dir so a nested --log-file doesn't crash.
+        log_parent = os.path.dirname(os.path.abspath(args.log_file))
+        if log_parent:
+            os.makedirs(log_parent, exist_ok=True)
     exts = {e.strip().lower() if e.strip().startswith(".") else "." + e.strip().lower()
             for e in args.extensions.split(",") if e.strip()}
     allow_frags = load_allowlist(args.allowlist)
-    os.makedirs(args.output_dir, exist_ok=True)
+    try:
+        os.makedirs(args.output_dir, exist_ok=True)
+    except OSError as e:
+        print("error: cannot create output dir %s: %s"
+              % (args.output_dir, e), file=sys.stderr)
+        return 2
 
     files, scan_root = collect_files(args.path, exts, args.output_dir)
+    if not files and os.path.isfile(args.path):
+        print("skipped: %s does not match --extensions (%s)"
+              % (args.path, ",".join(sorted(exts))), file=sys.stderr)
+        return 2
     log("scan start path=%s files=%d output=%s mode=%s workers=%d"
         % (args.path, len(files), args.output_dir,
            "move" if args.move else "copy", args.workers),

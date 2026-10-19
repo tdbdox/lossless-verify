@@ -33,6 +33,24 @@ if [ ! -d "$INCOMING" ]; then
   exit 1
 fi
 
+# Preflight: ffmpeg + Python deps, so a cron run fails fast with a clear
+# message instead of a traceback mid-scan.
+command -v ffmpeg >/dev/null 2>&1 || {
+  echo "ffmpeg not found on PATH — install ffmpeg first." >&2; exit 1; }
+python3 -c "import numpy, mutagen" 2>/dev/null || {
+  echo "Python deps missing — run: pip install -r requirements.txt" >&2; exit 1; }
+
+# If nothing arrived since the last run, exit quietly instead of leaving
+# an empty timestamped folder behind.
+FILE_COUNT=$(find "$INCOMING" -type f \( \
+  -iname '*.flac' -o -iname '*.wav' -o -iname '*.aiff' -o -iname '*.aif' \
+  -o -iname '*.mp3' -o -iname '*.m4a' -o -iname '*.ogg' -o -iname '*.opus' \
+  \) -print -quit | wc -l)
+if [ "$FILE_COUNT" -eq 0 ]; then
+  echo "incoming is empty ($INCOMING) — nothing to verify, exiting."
+  exit 0
+fi
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUTPUT="$OUTPUT_BASE/$STAMP"
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lossless-verify"
-version = "0.1.0"
+version = "0.1.1"
 description = "Detect fake-lossless / lossy-sourced audio and sort files by spectral verification result."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,6 +20,14 @@ dependencies = [
     "numpy>=1.24",
     "mutagen>=1.45",
 ]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.5"]
+
+[project.urls]
+Homepage = "https://github.com/tdbdox/lossless-verify"
+Repository = "https://github.com/tdbdox/lossless-verify.git"
+Issues = "https://github.com/tdbdox/lossless-verify/issues"
 
 [project.scripts]
 lossless-verify = "lossless_verify:cli"

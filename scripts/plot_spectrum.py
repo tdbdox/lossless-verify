@@ -11,13 +11,17 @@ Usage:
   # From an audio file (requires ffmpeg + lossless_verify.py):
   python3 scripts/plot_spectrum.py track.flac --output spectrum.png
 
-  # From a sanitized spectrum JSON (band_db + cutoff + max_drop):
-  python3 scripts/plot_spectrum.py --from-json spectrum.json --output spectrum.png
+  # From a sanitized spectrum JSON (auto-detected by .json extension):
+  python3 scripts/plot_spectrum.py spectrum.json --output spectrum.png
 
   # Side-by-side comparison for README (two JSONs or two audio files):
-  python3 scripts/plot_spectrum.py --compare genuine.json transcode.json \\
-      --output assets/spectrum-compare.png \\
+  python3 scripts/plot_spectrum.py --compare genuine.json transcode.json \
+      --output assets/spectrum-compare.png \
       --titles "Genuine lossless — PASS" "Transcoded — SUSPECT"
+
+  JSON inputs are auto-detected by the .json extension, so --from-json is only
+  needed for JSON files with a different extension. Because --compare takes its
+  own two files, --titles can appear before or after the inputs.
 
 The JSON format is the same shape as lossless_verify.py's .verdict.json sidecars
 (verdict, cutoff_hz, max_drop_db, sr, cliff_ratio, band_db), minus the
@@ -81,8 +85,13 @@ def plot_one(ax, spec, title):
     ax.axvline(cutoff_khz, color="red", linestyle="--", linewidth=1,
                label="cutoff %.0f kHz" % cutoff_khz)
     if drops:
+        # Label goes left of the cliff: a cliff at/above 15 kHz would push a
+        # right-side label past the axes edge (xlim tops out at sr/2).
+        # Clamp y so the label stays inside the (-60, 30) view.
+        text_x = max_khz - 5.5 if max_khz >= 15 else max_khz + 2
+        text_y = min(max(rel[max_khz] + 8, -55), 22)
         ax.annotate("steepest step\n%.1f dB @ %d kHz" % (max_drop, max_khz),
-                    xy=(max_khz, rel[max_khz]), xytext=(max_khz + 2, rel[max_khz] + 8),
+                    xy=(max_khz, rel[max_khz]), xytext=(text_x, text_y),
                     fontsize=8, arrowprops={"arrowstyle": "->", "lw": 0.8})
     ax.set_xlim(0, sr / 2000.0)
     ax.set_ylim(-60, 30)
@@ -99,7 +108,7 @@ def main(argv=None):
     p.add_argument("inputs", nargs="*", help="audio file(s) or spectrum JSON(s)")
     p.add_argument("--from-json", action="store_true",
                    help="treat inputs as spectrum JSON files (default: audio)")
-    p.add_argument("--compare", action="store_true",
+    p.add_argument("--compare", nargs=2, metavar=("FILE1", "FILE2"),
                    help="side-by-side comparison of exactly two inputs")
     p.add_argument("--titles", nargs="*", default=None,
                    help="titles for each panel (default: verdict + numbers)")
@@ -108,8 +117,9 @@ def main(argv=None):
     p.add_argument("--output", "-o", required=True, help="output PNG path")
     args = p.parse_args(argv)
 
-    if not args.inputs or (args.compare and len(args.inputs) != 2):
-        p.error("--compare needs exactly two inputs; otherwise pass one input")
+    inputs = list(args.compare) if args.compare else list(args.inputs)
+    if not inputs:
+        p.error("pass one input, or --compare FILE1 FILE2 for a side-by-side")
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -120,8 +130,8 @@ def main(argv=None):
         return 2
 
     specs = []
-    for inp in args.inputs:
-        if args.from_json:
+    for inp in inputs:
+        if args.from_json or inp.lower().endswith(".json"):
             specs.append(spectrum_from_json(inp))
         else:
             specs.append(spectrum_from_audio(inp, args.ffmpeg, args.ffprobe))

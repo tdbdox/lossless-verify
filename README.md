@@ -1,15 +1,13 @@
 # lossless-verify — fake-lossless detector + quality sorter (FLAC, WAV, AIFF, ALAC, MP3, M4A, OGG, Opus)
 
-Automated analysis detecting whether a FLAC (or WAV / AIFF / MP3 / M4A / OGG / Opus) file is lossless or a lossy file transcoded as a lossless file and automated filing of analyzed files into folders based on analysis output. This tool automates spectral analysis to mitigate usage of poor audio quality being used in professional applications in circumstances where industrial equipment such as venue sound systems are not available for live testing.
+The problem is real: MP3-to-FLAC transcodes are everywhere in download pools, sample packs, and "24-bit" stores. They look lossless (right extension, right bit depth) but they sound flat, especially on a big system. You cannot hear the difference on laptop speakers. You can measure it in the spectrum.
 
-MP3-to-FLAC transcodes are common in download pools, sample packs, and additionally, file sharing softwares at times, degrade spectrum quality of audio files.
-
-Despite an audio file displaying the correct extension, and metadata, its difficult to determine authenticity of sound quality unless you have access to the hardware to verify or sift through the tedious process of manually reviewing spectrogram images of imported audio files. lossless-verify assists needing to verify legitimate lossless audio.
+This tool automates that measurement — spectral analysis that detects lossy-to-lossless transcodes, then files everything into folders by verified quality. Built for a DJ download pipeline (fetch → analyze → sort), where you can't A/B every file on a venue system before the gig.
 
 ![Mean spectrum: genuine lossless (gradual slope) vs transcoded (vertical brickwall)](assets/spectrum-compare.png)
 
-Left: genuine lossless: gradual rolloff, steepest 1 kHz step 3.7 dB.
-Right: transcoded lossy to lossless: near-vertical brickwall, 38.3 dB drop at 16 kHz.
+Left: genuine lossless: gradual rolloff, steepest 1 kHz step 5.1 dB.
+Right: transcoded lossy to lossless: near-vertical brickwall, 28.7 dB drop at 15 kHz.
 
 ## How it works
 
@@ -24,18 +22,18 @@ Verdicts are driven by cliff steepness, not cutoff location:
 
 | Verdict | Rule |
 |---|---|
-| FAIL | Any 1 kHz step drops > 40 dB (unambiguous brickwall) |
-| SUSPECT | A step drops > 30 dB, or a step > 3× the local median slope with > 12 dB absolute below 24 kHz, or cutoff ≤ 18 kHz |
-| PASS | Otherwise |
-| UNKNOWN | Could not be decoded / no audible frames |
+| `FAIL` | Any 1 kHz step drops > 40 dB (unambiguous brickwall) |
+| `SUSPECT` | A step drops > 30 dB, or a step > 3× the local median slope with > 12 dB absolute below 24 kHz, or cutoff ≤ 18 kHz |
+| `PASS` | Otherwise |
+| `UNKNOWN` | Could not be decoded / no audible frames |
 
-Why steepness, not cutoff? Lossy codecs leave a near-vertical lowpass wall. Genuine masters roll off gradually flat modern masters, vintage tape slope, dark mixes. A low cutoff with no cliff is content, not a transcode fingerprint. Naive checkers that flag "cutoff < 20 kHz = fake" falsely flag genuine dark / vintage masters. This tool does not.
+Why steepness, not cutoff? Lossy codecs leave a near-vertical lowpass wall. Genuine masters roll off gradually — flat modern masters, vintage tape slope, dark mixes. A low cutoff with no cliff is content, not a transcode fingerprint. Naive checkers that flag "cutoff < 20 kHz = fake" falsely flag genuine dark / vintage masters. This tool does not.
 
 The relative-slope rule (3× median) only applies below 24 kHz, where lossy codecs actually lowpass. Above that, ultrasonic content is sparse and the ratio overshoots on genuine hi-res masters.
 
 ### Why lossy formats (MP3 / M4A / OGG / Opus) are scanned too
 
-lossless-verify verifies lossless claims, and it scans lossy formats by default on purpose. For lossy files the tool acts as a **generation-loss / bad-rip detector**: it separates clean 320k MP3 / 256k AAC files (which land in NEAR_CD) from re-encoded 128k rips (which land in BORDERLINE / LOW_QUALITY). That matters when pulling edits and remixes from SoundCloud or YouTube, where a file may have been re-encoded multiple times before you got it. Because lossy codecs still leave a lowpass wall, a clean 320 kbps MP3 lands in FAIL/NEAR_CD or SUSPECT/NEAR_CD rather than PASS (which is reserved for full-bandwidth lossless) letting the tier folders separate clean lossy files from degraded transcodes.
+lossless-verify verifies lossless claims, and it scans lossy formats by default on purpose. For lossy files the tool acts as a **generation-loss / bad-rip detector**: it separates clean 320k MP3 / 256k AAC files (which land in `NEAR_CD`) from re-encoded 128k rips (which land in `BORDERLINE` / `LOW_QUALITY`). That matters when pulling edits and remixes from SoundCloud or YouTube, where a file may have been re-encoded multiple times before you got it. Because lossy codecs still leave a lowpass wall, a clean 320 kbps MP3 lands in `FAIL`/`NEAR_CD` or `SUSPECT`/`NEAR_CD` rather than `PASS` (which is reserved for full-bandwidth lossless), letting the tier folders separate clean lossy files from degraded transcodes.
 
 ## Requirements
 
@@ -43,7 +41,7 @@ lossless-verify verifies lossless claims, and it scans lossy formats by default 
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Python | 3.9+ | Tested on 3.11 |
+| Python | 3.9+ | Tested on 3.11. On Windows, use `py -3` in place of `python3` |
 | ffmpeg + ffprobe | Any recent build | Must be on PATH, or pass --ffmpeg |
 | numpy, mutagen | See requirements.txt | Installed via pip (below) |
 
@@ -167,11 +165,11 @@ Each sorted file gets a `.verdict.json` sidecar. It includes the analysis plus `
 
 | Tier | Meaning |
 |---|---|
-| NEAR_CD | Near-CD quality, worth auditioning |
-| BORDERLINE | YouTube-grade or better, borderline |
-| LOW_QUALITY | Very low ceiling, unlikely salvageable |
+| `NEAR_CD` | Near-CD quality, worth auditioning |
+| `BORDERLINE` | YouTube-grade or better, borderline |
+| `LOW_QUALITY` | Very low ceiling, unlikely salvageable |
 
-LOW_QUALITY means low-quality, not garbage to auto-delete. Audition before deleting anything.
+`LOW_QUALITY` means low-quality, not garbage to auto-delete. Audition before deleting anything.
 
 ### Tagging (opt-in)
 
@@ -184,13 +182,14 @@ Lossless-Verify: PASS | cutoff 22.0kHz | 2026-10-18
 - FLAC → Vorbis comment
 - MP3 → ID3 COMM
 - M4A → ©cmt
-- WAV / AIFF / OGG / Opus → generic comment where supported
+- WAV / AIFF → ID3 COMM
+- OGG / Opus → Vorbis comment
 
 Re-running replaces the old stamp instead of stacking duplicates. DJ software that shows a Comments column (e.g. Rekordbox) can then build playlists off the verified quality level.
 
 ## Plotting spectra
 
-`scripts/plot_spectrum.py` renders a mean-spectrum plot from an audio file or from a `.verdict.json` sidecar (strip the original path before sharing JSONs). It is how the comparison image above was made.
+`scripts/plot_spectrum.py` renders a mean-spectrum plot from an audio file or from a `.verdict.json` sidecar (strip the original path before sharing JSONs). It is how the comparison image above was made. JSON inputs are auto-detected by the `.json` extension.
 
 ```bash
 # From audio files
@@ -205,8 +204,11 @@ python3 scripts/plot_spectrum.py --compare genuine.json transcode.json \
 Requires matplotlib (optional dependency, not in requirements.txt):
 
 ```bash
-pip install matplotlib
+pip install ".[plot]"
+# or: pip install matplotlib
 ```
+
+Note: the plotting script ships with the repo — run it from a clone (`scripts/plot_spectrum.py`). A pip/pipx install provides the `lossless-verify` command only.
 
 ## Automation — the original use case
 
@@ -218,7 +220,7 @@ Fetch → Analyze → Sort
 - Analyze: Run `lossless_verify.py` on the incoming folder.
 - Sort: Files land in PASS / SUSPECT / FAIL (+ tiers). The DJ / producer only reviews SUSPECT and FAIL. PASS files go straight to the library.
 
-Example — a minimal incoming-folder worker (see `examples/automate_workflow.sh`):
+Example — a minimal incoming-folder worker (see `examples/automate_workflow.sh` — it runs from a repo clone; on Windows, run it under Git Bash or WSL. If you installed via pipx, call the `lossless-verify` command directly instead):
 
 ```bash
 INCOMING=~/Music/incoming
